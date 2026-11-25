@@ -17,6 +17,7 @@ it as another user). The output directory itself is never chmodded.
 import os
 import stat
 import sys
+import tempfile
 
 # The entry: exactly one sentence, 144 characters.
 SENTENCE = (
@@ -48,6 +49,10 @@ def check_sentence(sentence):
         raise ValueError("sentence must contain exactly one full stop")
     if "!" in text or "?" in text:
         raise ValueError("sentence must not contain '!' or '?'")
+    if "  " in text:
+        raise ValueError("sentence must not contain double spaces")
+    if not text.isascii():
+        raise ValueError("sentence must be plain ASCII")
     return text
 
 
@@ -63,12 +68,24 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
 
     entry_path = os.path.join(output_dir, "entry.txt")
-    with open(entry_path, "w", encoding="utf-8", newline="") as handle:
-        handle.write(sentence)
-
-    # The grader collects outputs as a different user, so the file
-    # itself must be world-readable.
-    os.chmod(entry_path, 0o644)
+    # Write atomically: a temp file in the same directory, then rename
+    # it into place, so a crash can never leave a half-written entry.
+    # tempfile makes 0600 files regardless of umask, so chmod the temp
+    # file before the rename; the renamed file keeps that mode.
+    fd, temp_path = tempfile.mkstemp(
+        dir=output_dir, prefix=".entry-", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            handle.write(sentence)
+        os.chmod(temp_path, 0o644)
+        os.replace(temp_path, entry_path)
+    except BaseException:
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+        raise
 
     # Read the file back and prove what landed on disk is exact.
     with open(entry_path, "r", encoding="utf-8") as handle:
